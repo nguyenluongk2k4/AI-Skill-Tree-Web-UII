@@ -1,15 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Lock, CheckCircle2, Circle } from 'lucide-react';
 
 interface SkillNode {
   id: string;
   label: string;
+  fullName: string; // Added for full name display
   status: 'unlocked' | 'available' | 'locked';
   level: number;
   x: number;
   y: number;
   connections: string[];
   description?: string;
+  parentId?: string; // Added for hierarchical navigation
 }
 
 export function SkillTree() {
@@ -18,6 +20,12 @@ export function SkillTree() {
   const [selectedSpecialization, setSelectedSpecialization] = useState<string | null>(null);
   const [specializations, setSpecializations] = useState<any[]>([]);
   const [showTree, setShowTree] = useState(false);
+  const [visibleNodeIds, setVisibleNodeIds] = useState<Set<string>>(new Set());
+  const [showTooltip, setShowTooltip] = useState(false);
+  const [tooltipContent, setTooltipContent] = useState('');
+  const [tooltipX, setTooltipX] = useState(0);
+  const [tooltipY, setTooltipY] = useState(0);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const loadData = async () => {
@@ -54,6 +62,7 @@ export function SkillTree() {
     const rootNode: SkillNode = {
       id: specializationData.id,
       label: specializationData.name.length > 15 ? specializationData.name.substring(0, 15) + '...' : specializationData.name,
+      fullName: specializationData.name,
       status: 'unlocked',
       level: 0,
       x: 50,
@@ -74,12 +83,14 @@ export function SkillTree() {
         const abilityNode: SkillNode = {
           id: ability.id,
           label: ability.name.length > 12 ? ability.name.substring(0, 12) + '...' : ability.name,
+          fullName: ability.name,
           status: 'unlocked',
           level: 1,
           x: Math.max(10, Math.min(90, x)),
           y: 65,
           connections: [],
-          description: ability.description || ''
+          description: ability.description || '',
+          parentId: rootNode.id
         };
         nodes.push(abilityNode);
         rootNode.connections.push(ability.id);
@@ -95,12 +106,14 @@ export function SkillTree() {
             const skillNode: SkillNode = {
               id: skill.id,
               label: skill.name.length > 10 ? skill.name.substring(0, 10) + '...' : skill.name,
+              fullName: skill.name,
               status: skillIndex < Math.ceil(skills.length * 0.7) ? 'available' : 'locked',
               level: 2,
               x: Math.max(5, Math.min(95, skillX)),
               y: 45,
               connections: [],
-              description: skill.description || ''
+              description: skill.description || '',
+              parentId: abilityNode.id
             };
             nodes.push(skillNode);
             abilityNode.connections.push(skill.id);
@@ -116,12 +129,14 @@ export function SkillTree() {
                 const knowledgeNode: SkillNode = {
                   id: knowledge.id,
                   label: knowledge.name.length > 8 ? knowledge.name.substring(0, 8) + '...' : knowledge.name,
+                  fullName: knowledge.name,
                   status: knowledgeIndex < Math.ceil(knowledges.length * 0.3) ? 'available' : 'locked',
                   level: 3,
                   x: Math.max(2, Math.min(98, knowledgeX)),
                   y: 25,
                   connections: [],
-                  description: knowledge.description || ''
+                  description: knowledge.description || '',
+                  parentId: skillNode.id
                 };
                 nodes.push(knowledgeNode);
                 skillNode.connections.push(knowledge.id);
@@ -135,6 +150,97 @@ export function SkillTree() {
     return nodes;
   };
 
+  const handleNodeClick = (clickedNode: SkillNode) => {
+    setSelectedNode(clickedNode);
+    const newVisibleNodeIds = new Set<string>();
+    const allNodesMap = new Map<string, SkillNode>();
+    skillNodes.forEach(node => allNodesMap.set(node.id, node));
+
+    // Collect ancestors in correct order (từ gốc xuống node được click)
+    const ancestors: SkillNode[] = [];
+    let currentNode: SkillNode | undefined = clickedNode;
+    while (currentNode) {
+      ancestors.unshift(currentNode); // Thêm vào đầu mảng để có thứ tự từ gốc xuống
+      newVisibleNodeIds.add(currentNode.id);
+      if (currentNode.parentId) {
+        currentNode = allNodesMap.get(currentNode.parentId);
+      } else {
+        currentNode = undefined;
+      }
+    }
+
+    // Collect and add children if expanding
+    const children: SkillNode[] = [];
+    const knowledgeNodes: SkillNode[] = [];
+
+    if (visibleNodeIds.has(clickedNode.id)) {
+      // Get direct children
+      const directChildren = skillNodes.filter(node => node.parentId === clickedNode.id);
+      directChildren.forEach(child => {
+        children.push(child);
+        newVisibleNodeIds.add(child.id);
+      });
+
+      // If clicked node is a skill (level 2), show its knowledge nodes
+      if (clickedNode.level === 2) {
+        const childKnowledge = skillNodes.filter(node => node.parentId === clickedNode.id);
+        childKnowledge.forEach(knowledge => {
+          knowledgeNodes.push(knowledge);
+          newVisibleNodeIds.add(knowledge.id);
+        });
+      }
+    }
+
+    // Calculate positions for visible nodes
+    const verticalSpacing = 15; // Khoảng cách giữa các node dọc
+    const horizontalSpacing = 20; // Khoảng cách giữa các node ngang
+    const startY = 85; // Vị trí bắt đầu từ trên xuống
+    
+    // Update positions for all visible nodes
+    const updatedNodes = skillNodes.map(node => {
+      if (newVisibleNodeIds.has(node.id)) {
+        // Nếu là node tổ tiên (bao gồm cả node được click)
+        if (ancestors.find(n => n.id === node.id)) {
+          const index = ancestors.findIndex(n => n.id === node.id);
+          return {
+            ...node,
+            x: 50, // Căn giữa theo chiều ngang
+            y: startY - (index * verticalSpacing), // Sắp xếp từ trên xuống dưới
+          };
+        }
+        // Nếu là node con (ability hoặc skill)
+        else if (children.find(n => n.id === node.id)) {
+          const childIndex = children.findIndex(n => n.id === node.id);
+          const totalChildren = children.length;
+          const startX = 50 - ((totalChildren - 1) * horizontalSpacing) / 2;
+          return {
+            ...node,
+            x: startX + (childIndex * horizontalSpacing), // Phân bố đều theo chiều ngang
+            y: startY - ((ancestors.length - 1) * verticalSpacing) - verticalSpacing, // Đặt dưới node cha
+          };
+        }
+        // Nếu là knowledge node
+        else if (knowledgeNodes.find(n => n.id === node.id)) {
+          const parentSkill = clickedNode.level === 2 ? clickedNode : undefined;
+          if (parentSkill) {
+            const knowledgeIndex = knowledgeNodes.findIndex(n => n.id === node.id);
+            const totalKnowledge = knowledgeNodes.length;
+            const knowledgeStartX = parentSkill.x - ((totalKnowledge - 1) * (horizontalSpacing * 0.7)) / 2;
+            return {
+              ...node,
+              x: knowledgeStartX + (knowledgeIndex * horizontalSpacing * 0.7), // Phân bố đều dưới skill node, khoảng cách nhỏ hơn
+              y: startY - ((ancestors.length - 1) * verticalSpacing) - (verticalSpacing * 2), // Thêm một tầng dưới skill nodes
+            };
+          }
+        }
+      }
+      return node;
+    });
+
+    setSkillNodes(updatedNodes);
+    setVisibleNodeIds(newVisibleNodeIds);
+  };
+
   const selectSpecialization = (specId: string) => {
     const spec = specializations.find(s => s.id === specId);
     if (spec) {
@@ -143,6 +249,7 @@ export function SkillTree() {
       setSkillNodes(nodes);
       setShowTree(true);
       setSelectedNode(null);
+      setVisibleNodeIds(new Set([spec.id])); // Only show the root node initially
     }
   };
 
@@ -151,6 +258,7 @@ export function SkillTree() {
     setSelectedSpecialization(null);
     setSelectedNode(null);
     setSkillNodes([]);
+    setVisibleNodeIds(new Set());
   };
 
   const getStatusColor = (status: string) => {
@@ -176,7 +284,7 @@ export function SkillTree() {
   };
 
   return (
-    <div className="flex-1 bg-gradient-to-br from-white via-violet-50/20 to-teal-50/20 p-8 overflow-auto">
+    <div ref={containerRef} className="flex-1 bg-gradient-to-br from-white via-violet-50/20 to-teal-50/20 p-8 overflow-auto relative">
       {!showTree ? (
         // Specialization Selection Screen
         <div className="max-w-6xl mx-auto">
@@ -261,20 +369,21 @@ export function SkillTree() {
                   </defs>
 
                   {/* Connection Lines */}
-                  {skillNodes.map((node) =>
-                    node.connections.map((targetId) => {
+                  {skillNodes.filter(node => visibleNodeIds.has(node.id)).map((node) =>
+                    node.connections.filter(targetId => visibleNodeIds.has(targetId)).map((targetId) => {
                       const target = skillNodes.find((n) => n.id === targetId);
                       if (!target) return null;
                       
                       const isUnlocked = node.status === 'unlocked' && (target.status === 'unlocked' || target.status === 'available');
                       
+                      // Draw straight lines between parent and child nodes
                       return (
                         <line
                           key={`${node.id}-${targetId}`}
                           x1={node.x}
-                          y1={node.y}
+                          y1={node.y + 3} // Offset from bottom of parent node
                           x2={target.x}
-                          y2={target.y}
+                          y2={target.y - 3} // Offset from top of child node
                           stroke={isUnlocked ? '#8b5cf6' : '#d4d4d8'}
                           strokeWidth="0.3"
                           strokeDasharray={isUnlocked ? '0' : '1,1'}
@@ -285,7 +394,7 @@ export function SkillTree() {
                   )}
 
                   {/* Skill Nodes */}
-                  {skillNodes.map((node) => {
+                  {skillNodes.filter(node => visibleNodeIds.has(node.id)).map((node) => {
                     const Icon = getStatusIcon(node.status);
                     const isSelected = selectedNode?.id === node.id;
                     
@@ -293,10 +402,21 @@ export function SkillTree() {
                       <g
                         key={node.id}
                         transform={`translate(${node.x}, ${node.y})`}
-                        onClick={() => setSelectedNode(node)}
+                        onClick={() => handleNodeClick(node)}
+                        onMouseEnter={(e) => {
+                          if (containerRef.current) {
+                            const containerRect = containerRef.current.getBoundingClientRect();
+                            setShowTooltip(true);
+                            setTooltipContent(node.fullName);
+                            setTooltipX(e.clientX - containerRect.left + 10);
+                            setTooltipY(e.clientY - containerRect.top + 10);
+                          }
+                        }}
+                        onMouseLeave={() => setShowTooltip(false)}
                         className="cursor-pointer"
                         style={{ transition: 'transform 0.2s' }}
                       >
+                        <title>{node.fullName}</title>
                         {/* Outer ring for selected */}
                         {isSelected && (
                           <circle
@@ -341,7 +461,7 @@ export function SkillTree() {
                       return <Icon className="w-6 h-6 text-white" />;
                     })()}
                   </div>
-                  <h3 className="text-foreground mb-2">{selectedNode.label}</h3>
+                  <h3 className="text-foreground mb-2">{selectedNode.fullName}</h3>
                   <p className="text-muted-foreground mb-4">
                     {selectedNode.status === 'unlocked' && 'Completed - Well done!'}
                     {selectedNode.status === 'available' && 'Ready to learn - Start now!'}
@@ -399,7 +519,7 @@ export function SkillTree() {
                     return <Icon className="w-6 h-6 text-white" />;
                   })()}
                 </div>
-                <h3 className="text-foreground mb-2">{selectedNode.label}</h3>
+                  <h3 className="text-foreground mb-2">{selectedNode.fullName}</h3>
                 <p className="text-muted-foreground mb-4">
                   {selectedNode.status === 'unlocked' && 'Completed - Well done!'}
                   {selectedNode.status === 'available' && 'Ready to learn - Start now!'}
@@ -445,6 +565,15 @@ export function SkillTree() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {showTooltip && (
+        <div
+          className="absolute z-50 px-3 py-2 text-sm font-medium text-white transition-opacity duration-300 bg-gray-900 rounded-lg shadow-sm opacity-90 dark:bg-gray-700"
+          style={{ left: tooltipX, top: tooltipY, pointerEvents: 'none' }}
+        >
+          {tooltipContent}
         </div>
       )}
     </div>
